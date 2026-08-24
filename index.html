@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>เกม AR สำนวนสุภาษิตคำพังเพย ม.5</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- MediaPipe for Hand Tracking -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+    <!-- Canvas Confetti for celebrations -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.6.0/dist/confetti.browser.min.js"></script>
+    <!-- SweetAlert2 for nice popups -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Kanit', sans-serif;
+            margin: 0;
+            overflow: hidden;
+            background-color: #f0fdf4; /* Light green background */
+            touch-action: none; /* Prevent scroll on mobile */
+        }
+        
+        #video-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: 1;
+            background: #000;
+        }
+
+        .mirrored {
+            transform: scaleX(-1);
+        }
+
+        video, canvas {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        canvas {
+            z-index: 2;
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 10;
+            pointer-events: none; /* Let clicks pass through if needed, though interaction is via camera */
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        /* Glassmorphism for UI elements */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.85);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 2px solid rgba(255, 255, 255, 0.5);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.1);
+            border-radius: 1.5rem;
+        }
+
+        .option-card {
+            pointer-events: auto;
+            transition: all 0.2s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .option-card.active-hover {
+            transform: scale(1.05);
+            border-color: #3b82f6;
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+        }
+
+        /* Progress Ring SVG */
+        .progress-ring {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(-90deg);
+            width: 80px;
+            height: 80px;
+            opacity: 0;
+            transition: opacity 0.2s;
+            pointer-events: none;
+        }
+
+        .option-card.active-hover .progress-ring {
+            opacity: 1;
+        }
+
+        .progress-ring-circle-bg {
+            fill: none;
+            stroke: rgba(0, 0, 0, 0.1);
+            stroke-width: 6;
+        }
+
+        .progress-ring-circle {
+            fill: none;
+            stroke: #3b82f6;
+            stroke-width: 6;
+            stroke-dasharray: 226; /* 2 * pi * r (approx 36) */
+            stroke-dashoffset: 226;
+            transition: stroke-dashoffset 0.1s linear;
+        }
+
+        /* Animations */
+        @keyframes shake {
+            0% { transform: translateX(0); }
+            25% { transform: translateX(-10px); }
+            50% { transform: translateX(10px); }
+            75% { transform: translateX(-10px); }
+            100% { transform: translateX(0); }
+        }
+
+        .shake {
+            animation: shake 0.4s cubic-bezier(.36,.07,.19,.97) both;
+            border-color: #ef4444 !important;
+            background: rgba(254, 226, 226, 0.9) !important;
+        }
+
+        .correct-pulse {
+            background: rgba(220, 252, 231, 0.95) !important;
+            border-color: #22c55e !important;
+            transform: scale(1.1) !important;
+        }
+
+        /* Loading Spinner */
+        .loader {
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #22c55e;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Cursor / Target visual */
+        #hand-cursor {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            background: rgba(255, 215, 0, 0.6);
+            border: 3px solid #ffaa00;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 50;
+            pointer-events: none;
+            display: none;
+            box-shadow: 0 0 15px rgba(255, 215, 0, 0.8);
+            transition: width 0.1s, height 0.1s;
+        }
+        #hand-cursor.holding {
+            width: 40px;
+            height: 40px;
+            background: rgba(59, 130, 246, 0.6);
+            border-color: #2563eb;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Start Screen -->
+    <div id="start-screen" class="absolute inset-0 z-50 flex flex-col items-center justify-center bg-gradient-to-br from-green-50 to-emerald-100 px-4">
+        <div class="glass-panel p-8 text-center max-w-2xl w-full flex flex-col items-center shadow-2xl">
+            <div class="text-7xl mb-4 animate-bounce">🪔</div>
+            <h1 class="text-3xl md:text-5xl font-bold text-green-800 mb-2">สำนวนสุภาษิตคำพังเพย ม.5</h1>
+            <p class="text-lg md:text-xl text-gray-600 mb-6 bg-white bg-opacity-50 p-4 rounded-xl">
+                เล่นด้วยการขยับมือหน้ากล้อง ไม่ต้องแตะจอ!<br>
+                <span class="text-sm text-blue-600 font-semibold mt-2 block">กติกา: เลื่อนมือไปวางบนคำตอบ แล้วค้างไว้ 2 วินาที</span>
+            </p>
+            <button id="start-btn" class="bg-green-600 hover:bg-green-700 text-white font-bold py-4 px-10 rounded-full text-2xl transition transform hover:scale-105 shadow-lg flex items-center gap-3">
+                <span>เริ่มเล่นเลย</span>
+                <span class="text-3xl">📷</span>
+            </button>
+            <div id="loading-cam" class="hidden mt-6 flex-col items-center">
+                <div class="loader mb-2"></div>
+                <p class="text-green-700 font-medium text-lg">กำลังเปิดกล้อง และ AI...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Game Area -->
+    <div id="game-area" class="hidden">
+        <div id="video-container">
+            <video id="input_video" class="mirrored" autoplay playsinline></video>
+            <canvas id="output_canvas" class="mirrored"></canvas>
+            <div id="hand-cursor"></div>
+        </div>
+
+        <div id="ui-layer">
+            <!-- Top Bar -->
+            <div class="flex justify-between items-start w-full gap-4 max-w-6xl mx-auto">
+                <div class="glass-panel px-6 py-3 flex items-center gap-3">
+                    <div class="text-3xl">⭐</div>
+                    <div>
+                        <div class="text-sm text-gray-500 font-bold uppercase tracking-wider">คะแนน</div>
+                        <div class="text-2xl font-bold text-gray-800 leading-none" id="score-display">0 / 12</div>
+                    </div>
+                </div>
+                
+                <div class="glass-panel px-6 py-3 flex items-center gap-3 bg-blue-50 bg-opacity-90">
+                    <div class="text-3xl">🏆</div>
+                    <div>
+                        <div class="text-sm text-blue-500 font-bold uppercase tracking-wider" id="level-title">ด่านที่ 1</div>
+                        <div class="text-2xl font-bold text-blue-800 leading-none" id="progress-display">ข้อ 1/4</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Question and Mascot -->
+            <div class="w-full flex flex-col items-center my-auto">
+                <!-- Speech Bubble -->
+                <div class="glass-panel p-6 mb-4 max-w-3xl w-[90%] text-center relative border-4 border-emerald-400">
+                    <div class="absolute -bottom-4 left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-[15px] border-l-transparent border-r-[15px] border-r-transparent border-t-[15px] border-t-emerald-400"></div>
+                    <div class="absolute -bottom-3 left-1/2 transform -translate-x-1/2 w-0 h-0 border-l-[12px] border-l-transparent border-r-[12px] border-r-transparent border-t-[12px] border-t-white opacity-85"></div>
+                    
+                    <h2 id="question-text" class="text-2xl md:text-4xl font-bold text-gray-800 leading-tight">
+                        กำลังโหลดคำถาม...
+                    </h2>
+                </div>
+                
+                <!-- Mascot -->
+                <div class="text-7xl animate-pulse drop-shadow-xl" id="mascot">🪔</div>
+            </div>
+
+            <!-- Options (Bottom) -->
+            <div class="w-full max-w-6xl mx-auto pb-4">
+                <div id="options-container" class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <!-- Options injected here by JS -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. Game Data ---
+        const gameData = [
+            {
+                level: 1,
+                title: "ด่าน 1 (ง่าย)",
+                questions: [
+                    { q: "น้ำขึ้นให้รีบตัก สอนเรื่องใด", options: ["ฉวยโอกาสที่ดี", "ประหยัดน้ำ", "รีบเร่งเกินไป"], ans: 0 },
+                    { q: "ชี้โพรงให้กระรอก หมายถึงข้อใด", options: ["ช่วยเหลือผู้อื่น", "บอกช่องทางให้ทำผิด", "หลงทางในป่า"], ans: 1 },
+                    { q: "ตำน้ำพริกละลายแม่น้ำ หมายถึงข้อใด", options: ["ทำอาหารเก่ง", "แบ่งปันผู้อื่น", "ลงทุนแล้วไม่คุ้มค่า"], ans: 2 },
+                    { q: "กว่าถั่วจะสุกงาก็ไหม้ หมายถึงข้อใด", options: ["ช้าจนเสียการ", "ทำงานรอบคอบ", "ประหยัดเวลา"], ans: 0 }
+                ]
+            },
+            {
+                level: 2,
+                title: "ด่าน 2 (ปานกลาง)",
+                questions: [
+                    { q: "สุภาษิตต่างจากสำนวนอย่างไร", options: ["ไม่มีความหมาย", "มีคำสอนชัดเจน", "มีความยาวกว่า"], ans: 1 },
+                    { q: "คำพังเพยมีลักษณะอย่างไร", options: ["กล่าวกลางๆ ไม่สอนตรง", "เป็นประโยคคำสั่ง", "เป็นประโยคคำถาม"], ans: 0 },
+                    { q: "ขี่ช้างจับตั๊กแตน หมายถึงข้อใด", options: ["ทำงานเป็นทีม", "ใช้กำลังพอดี", "ลงทุนมากได้ผลน้อย"], ans: 2 },
+                    { q: "เข้าเมืองตาหลิ่วต้องหลิ่วตาตาม สอนเรื่องใด", options: ["ปรับตัวตามสังคม", "รักษาความเป็นตัวเอง", "หลอกลวงผู้อื่น"], ans: 0 }
+                ]
+            },
+            {
+                level: 3,
+                title: "ด่าน 3 (ยาก)",
+                questions: [
+                    { q: "รำไม่ดีโทษปี่โทษกลอง หมายถึงข้อใด", options: ["ฝึกซ้อมสม่ำเสมอ", "เล่นดนตรีไทยเก่ง", "โทษผู้อื่นเมื่อตนผิด"], ans: 2 },
+                    { q: "ปิดทองหลังพระ หมายถึงข้อใด", options: ["ทำดีไม่หวังชื่อเสียง", "ทำบุญที่วัด", "ปกปิดความผิด"], ans: 0 },
+                    { q: "สีซอให้ควายฟัง หมายถึงข้อใด", options: ["สอนคนไม่รู้เรื่อง", "เล่นดนตรีเก่ง", "ชอบเลี้ยงสัตว์"], ans: 0 },
+                    { q: "ตกกระไดพลอยโจน หมายถึงข้อใด", options: ["กระโดดจากที่สูง", "จำใจทำตามสถานการณ์", "วางแผนล่วงหน้า"], ans: 1 }
+                ]
+            }
+        ];
+
+        // --- 2. State Variables ---
+        let currentLevel = 0;
+        let currentQuestion = 0;
+        let score = 0;
+        let isProcessingAnswer = false; // Prevent multiple selections
+        
+        // Hold Mechanics variables
+        let hoveredOptionIndex = -1;
+        let hoverStartTime = 0;
+        const HOLD_DURATION = 2000; // 2 seconds
+        let isHolding = false;
+
+        // Audio Context & TTS
+        let audioCtx;
+        const synth = window.speechSynthesis;
+        let thaiVoice = null;
+
+        // DOM Elements
+        const videoElement = document.getElementById('input_video');
+        const canvasElement = document.getElementById('output_canvas');
+        const canvasCtx = canvasElement.getContext('2d');
+        const handCursor = document.getElementById('hand-cursor');
+        
+        const questionText = document.getElementById('question-text');
+        const optionsContainer = document.getElementById('options-container');
+        const levelTitle = document.getElementById('level-title');
+        const progressDisplay = document.getElementById('progress-display');
+        const scoreDisplay = document.getElementById('score-display');
+        
+        // --- STREAMING_CHUNK:Audio & TTS System ---
+        function initAudio() {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            // Populate voices
+            const loadVoices = () => {
+                const voices = synth.getVoices();
+                thaiVoice = voices.find(v => v.lang.includes('th')) || voices[0];
+            };
+            loadVoices();
+            if (speechSynthesis.onvoiceschanged !== undefined) {
+                speechSynthesis.onvoiceschanged = loadVoices;
+            }
+        }
+
+        function speak(text) {
+            synth.cancel(); // Stop current speech
+            const utterance = new SpeechSynthesisUtterance(text);
+            if (thaiVoice) utterance.voice = thaiVoice;
+            utterance.lang = 'th-TH';
+            utterance.rate = 1.0;
+            utterance.pitch = 1.1;
+            synth.speak(utterance);
+        }
+
+        function playSound(type) {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+            
+            osc.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            if (type === 'correct') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
+                osc.frequency.exponentialRampToValueAtTime(1046.50, audioCtx.currentTime + 0.1); // C6
+                gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.5);
+            } else if (type === 'wrong') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+                osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.3);
+                gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.3);
+            } else if (type === 'pop') {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+                gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+                gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+                osc.start();
+                osc.stop(audioCtx.currentTime + 0.1);
+            }
+        }
+
+        // --- STREAMING_CHUNK:Game Rendering & Flow ---
+        function loadQuestion() {
+            isProcessingAnswer = false;
+            hoveredOptionIndex = -1;
+            isHolding = false;
+            resetAllProgressRings();
+
+            const levelData = gameData[currentLevel];
+            const qData = levelData.questions[currentQuestion];
+
+            // Update UI texts
+            levelTitle.innerText = levelData.title;
+            progressDisplay.innerText = `ข้อ ${currentQuestion + 1}/${levelData.questions.length}`;
+            scoreDisplay.innerText = `${score} / 12`;
+            questionText.innerText = qData.q;
+
+            // Render Options
+            optionsContainer.innerHTML = '';
+            qData.options.forEach((opt, index) => {
+                const card = document.createElement('div');
+                card.className = 'glass-panel p-6 text-center cursor-pointer option-card flex items-center justify-center min-h-[120px]';
+                card.id = `option-${index}`;
+                card.dataset.index = index;
+                
+                // SVG Progress Ring
+                const ringHTML = `
+                    <svg class="progress-ring">
+                        <circle class="progress-ring-circle-bg" cx="40" cy="40" r="36"></circle>
+                        <circle class="progress-ring-circle" cx="40" cy="40" r="36" id="ring-${index}"></circle>
+                    </svg>
+                `;
+
+                card.innerHTML = `
+                    ${ringHTML}
+                    <span class="text-xl md:text-2xl font-semibold text-gray-700 relative z-10 w-full break-words px-2">${opt}</span>
+                `;
+                optionsContainer.appendChild(card);
+            });
+
+            // Speak intro & question
+            if (currentLevel === 0 && currentQuestion === 0) {
+                speak("เลือกความหมายของสำนวนไทย ข้อแรก " + qData.q);
+            } else {
+                speak(qData.q);
+            }
+        }
+
+        function setRingProgress(index, percentage) {
+            const circle = document.getElementById(`ring-${index}`);
+            if (circle) {
+                const circumference = 226; // 2 * pi * 36
+                const offset = circumference - (percentage / 100) * circumference;
+                circle.style.strokeDashoffset = offset;
+            }
+        }
+
+        function resetAllProgressRings() {
+            const cards = document.querySelectorAll('.option-card');
+            cards.forEach(card => {
+                card.classList.remove('active-hover');
+                const idx = card.dataset.index;
+                setRingProgress(idx, 0);
+            });
+        }
+
+        function handleAnswer(selectedIndex) {
+            if (isProcessingAnswer) return;
+            isProcessingAnswer = true;
+            
+            const levelData = gameData[currentLevel];
+            const qData = levelData.questions[currentQuestion];
+            const isCorrect = (selectedIndex === qData.ans);
+            
+            const selectedCard = document.getElementById(`option-${selectedIndex}`);
+
+            if (isCorrect) {
+                // Correct Answer
+                score++;
+                scoreDisplay.innerText = `${score} / 12`;
+                selectedCard.classList.add('correct-pulse');
+                playSound('correct');
+                speak("ถูกต้องครับ");
+                
+                confetti({
+                    particleCount: 100,
+                    spread: 70,
+                    origin: { y: 0.6 },
+                    colors: ['#22c55e', '#3b82f6', '#fbbf24']
+                });
+
+                // Next Question Delay
+                setTimeout(() => {
+                    currentQuestion++;
+                    if (currentQuestion >= levelData.questions.length) {
+                        currentLevel++;
+                        currentQuestion = 0;
+                        if (currentLevel >= gameData.length) {
+                            showEndGame();
+                        } else {
+                            showLevelUp();
+                        }
+                    } else {
+                        loadQuestion();
+                    }
+                }, 2000);
+
+            } else {
+                // Wrong Answer
+                selectedCard.classList.add('shake');
+                playSound('wrong');
+                speak("ยังไม่ถูกครับ ลองใหม่นะ");
+                
+                // Reset card after shake so they can try again
+                setTimeout(() => {
+                    selectedCard.classList.remove('shake');
+                    isProcessingAnswer = false; // Allow trying again without penalizing score
+                    hoveredOptionIndex = -1;
+                    resetAllProgressRings();
+                }, 1000);
+            }
+        }
+
+        function showLevelUp() {
+            playSound('correct'); // Fanfare could be here
+            speak(`เก่งมากครับ ผ่านด่านที่ ${currentLevel} แล้ว ลุยต่อด่าน ${currentLevel+1} เลย`);
+            Swal.fire({
+                title: '🎉 ยอดเยี่ยม!',
+                text: 'เตรียมตัวเข้าสู่ด่านต่อไป',
+                icon: 'success',
+                timer: 3000,
+                showConfirmButton: false,
+                backdrop: `rgba(34,197,94,0.4)`
+            }).then(() => {
+                loadQuestion();
+            });
+        }
+
+        function showEndGame() {
+            playSound('correct');
+            speak(`ยินดีด้วยครับ คุณได้คะแนน ${score} เต็ม 12 รับถ้วยรางวัลไปเลย`);
+            
+            // Grand Confetti
+            var duration = 3000;
+            var end = Date.now() + duration;
+            (function frame() {
+                confetti({ particleCount: 5, angle: 60, spread: 55, origin: { x: 0 }, colors: ['#fbbf24', '#f59e0b'] });
+                confetti({ particleCount: 5, angle: 120, spread: 55, origin: { x: 1 }, colors: ['#fbbf24', '#f59e0b'] });
+                if (Date.now() < end) { requestAnimationFrame(frame); }
+            }());
+
+            Swal.fire({
+                title: '🏆 ยินดีด้วย!',
+                html: `คุณเล่นจบทุกด่านแล้ว<br>ได้คะแนน <b>${score} / 12</b>`,
+                confirmButtonText: 'เล่นอีกครั้ง',
+                confirmButtonColor: '#22c55e',
+                allowOutsideClick: false
+            }).then((result) => {
+                if (result.isConfirmed) {
+                    currentLevel = 0;
+                    currentQuestion = 0;
+                    score = 0;
+                    loadQuestion();
+                }
+            });
+        }
+
+        // --- STREAMING_CHUNK:MediaPipe Hand Tracking System ---
+        function onResults(results) {
+            // Draw camera feed
+            canvasCtx.save();
+            canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+            // We don't draw image to canvas here because video element is beneath it,
+            // or we could draw it. Drawing it allows drawing landmarks cleanly.
+            canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+            let pointerFound = false;
+
+            if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                // Get the first hand
+                const landmarks = results.multiHandLandmarks[0];
+                
+                // Draw skeleton (optional, can comment out if distracting)
+                // drawConnectors(canvasCtx, landmarks, HAND_CONNECTIONS, {color: '#ffffff', lineWidth: 2});
+                // drawLandmarks(canvasCtx, landmarks, {color: '#3b82f6', lineWidth: 1, radius: 3});
+
+                // Index Finger Tip is landmark 8
+                const indexFinger = landmarks[8];
+                
+                // Video is mirrored via CSS scaleX(-1), so MediaPipe X coords need to be flipped
+                // to match the screen coordinate system.
+                const screenX = (1 - indexFinger.x) * window.innerWidth;
+                const screenY = indexFinger.y * window.innerHeight;
+
+                pointerFound = true;
+                updateCursorAndPhysics(screenX, screenY);
+            }
+
+            if (!pointerFound) {
+                handCursor.style.display = 'none';
+                resetAllProgressRings();
+                hoveredOptionIndex = -1;
+                isHolding = false;
+            }
+
+            canvasCtx.restore();
+        }
+
+        function updateCursorAndPhysics(x, y) {
+            if (isProcessingAnswer) {
+                handCursor.style.display = 'none';
+                return;
+            }
+
+            // Update custom cursor position
+            handCursor.style.display = 'block';
+            handCursor.style.left = `${x}px`;
+            handCursor.style.top = `${y}px`;
+
+            // Hit Detection with UI elements
+            const cards = document.querySelectorAll('.option-card');
+            let foundHover = -1;
+
+            cards.forEach(card => {
+                const rect = card.getBoundingClientRect();
+                // Simple point inside rect collision
+                if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+                    foundHover = parseInt(card.dataset.index);
+                }
+            });
+
+            // Logic for Holding
+            const now = Date.now();
+
+            if (foundHover !== -1) {
+                // Currently hovering a card
+                if (hoveredOptionIndex !== foundHover) {
+                    // Just entered a new card
+                    resetAllProgressRings();
+                    hoveredOptionIndex = foundHover;
+                    hoverStartTime = now;
+                    isHolding = true;
+                    document.getElementById(`option-${foundHover}`).classList.add('active-hover');
+                    playSound('pop');
+                } else {
+                    // Still hovering the same card -> Increase progress
+                    const elapsed = now - hoverStartTime;
+                    let progress = (elapsed / HOLD_DURATION) * 100;
+                    
+                    if (progress >= 100) {
+                        progress = 100;
+                        setRingProgress(foundHover, progress);
+                        handleAnswer(foundHover);
+                    } else {
+                        setRingProgress(foundHover, progress);
+                        handCursor.classList.add('holding');
+                    }
+                }
+            } else {
+                // Finger is not over any card
+                if (isHolding) {
+                    resetAllProgressRings();
+                    hoveredOptionIndex = -1;
+                    isHolding = false;
+                    handCursor.classList.remove('holding');
+                }
+            }
+        }
+
+        // --- STREAMING_CHUNK:Initialization ---
+        async function initGame() {
+            document.getElementById('start-btn').classList.add('hidden');
+            document.getElementById('loading-cam').classList.remove('hidden');
+            document.getElementById('loading-cam').classList.add('flex');
+            
+            initAudio();
+            speak("กำลังเปิดกล้อง กรุณารอสักครู่");
+
+            // Setup MediaPipe Hands
+            const hands = new Hands({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+                }
+            });
+            hands.setOptions({
+                maxNumHands: 1,
+                modelComplexity: 1,
+                minDetectionConfidence: 0.6,
+                minTrackingConfidence: 0.6
+            });
+            hands.onResults(onResults);
+
+            // Resize canvas to match window
+            function resizeCanvas() {
+                canvasElement.width = window.innerWidth;
+                canvasElement.height = window.innerHeight;
+            }
+            window.addEventListener('resize', resizeCanvas);
+            resizeCanvas();
+
+            // Setup Camera
+            const camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 1280,
+                height: 720,
+                facingMode: 'user' // Front camera
+            });
+            
+            try {
+                await camera.start();
+                // Hide Start Screen, Show Game Area
+                document.getElementById('start-screen').classList.add('hidden');
+                document.getElementById('game-area').classList.remove('hidden');
+                document.getElementById('game-area').classList.add('block');
+                
+                loadQuestion();
+            } catch (err) {
+                console.error(err);
+                Swal.fire('ข้อผิดพลาด', 'ไม่สามารถเข้าถึงกล้องได้ กรุณาอนุญาตให้ใช้งานกล้อง', 'error');
+                document.getElementById('start-btn').classList.remove('hidden');
+                document.getElementById('loading-cam').classList.add('hidden');
+                document.getElementById('loading-cam').classList.remove('flex');
+            }
+        }
+
+        // Event Listener for Start Button
+        document.getElementById('start-btn').addEventListener('click', initGame);
+
+    </script>
+</body>
+</html>
